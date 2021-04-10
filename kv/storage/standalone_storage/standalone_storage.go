@@ -19,9 +19,11 @@ type StandAloneStorage struct {
 
 func NewStandAloneStorage(conf *config.Config) *StandAloneStorage {
 	// Your Code Here (1).
-	kvDB := engine_util.CreateDB(conf.DBPath, conf.Raft)
-	raftDB := engine_util.CreateDB(conf.DBPath, conf.Raft)
-	engine := engine_util.NewEngines(kvDB, raftDB, "/kv", "/raft")
+	kvPath := "/kv"
+	raftPath := "/raft"
+	kvDB := engine_util.CreateDB(conf.DBPath+kvPath, conf.Raft)
+	raftDB := engine_util.CreateDB(conf.DBPath+raftPath, conf.Raft)
+	engine := engine_util.NewEngines(kvDB, raftDB, kvPath, raftPath)
 	standAloneStorage := &StandAloneStorage{Engines: engine}
 	return standAloneStorage
 }
@@ -33,7 +35,7 @@ func (s *StandAloneStorage) Start() error {
 
 func (s *StandAloneStorage) Stop() error {
 	// Your Code Here (1).
-	_ = s.Close()
+	_ = s.Destroy()
 	return nil
 }
 
@@ -50,9 +52,10 @@ func (s *StandAloneStorage) Write(ctx *kvrpcpb.Context, batch []storage.Modify) 
 
 	wb := &engine_util.WriteBatch{}
 	for _, m := range batch {
+		cf := m.Cf()
 		key := m.Key()
 		value := m.Value()
-		_ = wb.SetMeta(key, &kvrpcpb.RawPutRequest{Key: key, Value: value})
+		wb.SetCF(cf, key, value)
 	}
 	_ = s.WriteKV(wb)
 
