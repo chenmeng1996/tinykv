@@ -5,7 +5,6 @@ import (
 	"github.com/pingcap-incubator/tinykv/kv/storage"
 	"github.com/pingcap-incubator/tinykv/kv/util/engine_util"
 	"github.com/pingcap-incubator/tinykv/proto/pkg/kvrpcpb"
-	"sync"
 )
 
 // StandAloneStorage is an implementation of `Storage` for a single-node TinyKV instance. It does not
@@ -13,7 +12,6 @@ import (
 type StandAloneStorage struct {
 	// Your Data Here (1).
 	//data map[string]string
-	sync.RWMutex
 	*engine_util.Engines
 }
 
@@ -47,9 +45,6 @@ func (s *StandAloneStorage) Reader(ctx *kvrpcpb.Context) (storage.StorageReader,
 
 func (s *StandAloneStorage) Write(ctx *kvrpcpb.Context, batch []storage.Modify) error {
 	// Your Code Here (1).
-	s.Lock()
-	defer s.Unlock()
-
 	wb := &engine_util.WriteBatch{}
 	for _, m := range batch {
 		cf := m.Cf()

@@ -45,12 +45,16 @@ func (server *Server) RawGet(_ context.Context, req *kvrpcpb.RawGetRequest) (*kv
 		return res, err
 	}
 
-	cf, err := reader.GetCF(req.GetCf(), req.GetKey())
+	value, err := reader.GetCF(req.GetCf(), req.GetKey())
+	if value == nil && err == nil {
+		res.NotFound = true
+		return res, err
+	}
 	if err != nil {
 		res.Error = err.Error()
 		return res, err
 	}
-	res.Value = cf
+	res.Value = value
 
 	return res, nil
 }
@@ -104,11 +108,18 @@ func (server *Server) RawScan(_ context.Context, req *kvrpcpb.RawScanRequest) (*
 		res.Error = err.Error()
 		return res, err
 	}
+
 	dbIterator := reader.IterCF(req.GetCf())
-	kvs := make([]kvrpcpb.KvPair, 0)
+	defer dbIterator.Close()
+	kvs := make([]*kvrpcpb.KvPair, 0)
+	var limitCount uint32 = 0
+
+	if req.StartKey != nil {
+		dbIterator.Seek(req.StartKey)
+	}
 	for ; dbIterator.Valid(); dbIterator.Next() {
 		dbItem := dbIterator.Item()
-		kvPair := kvrpcpb.KvPair{
+		kvPair := &kvrpcpb.KvPair{
 			Key: dbItem.Key(),
 		}
 		v, err := dbItem.Value()
@@ -117,9 +128,14 @@ func (server *Server) RawScan(_ context.Context, req *kvrpcpb.RawScanRequest) (*
 		} else {
 			kvPair.Value = v
 		}
+		limitCount += 1
+		if limitCount > req.Limit {
+			break
+		}
 		kvs = append(kvs, kvPair)
 	}
 
+	res.Kvs = kvs
 	return res, nil
 }
 
