@@ -230,6 +230,8 @@ func (r *Raft) becomeCandidate() {
 func (r *Raft) becomeLeader() {
 	// Your Code Here (2A).
 	// NOTE: Leader should propose a noop entry on its term
+	r.State = StateLeader
+	// 发起空提议 TODO
 
 }
 
@@ -261,7 +263,8 @@ func (r *Raft) Step(m pb.Message) error {
 		case pb.MessageType_MsgHup:
 			// 转换为candidate
 			r.becomeCandidate()
-			// 发送MessageType_MsgRequestVote给peers请求投票 TODO
+			// 发送MessageType_MsgRequestVote给peers请求投票
+			r.sendRequestVoteToPeers()
 		case pb.MessageType_MsgRequestVote:
 			// 拒绝投票
 			if r.Term >= m.Term || r.Vote != 0 {
@@ -292,17 +295,20 @@ func (r *Raft) Step(m pb.Message) error {
 	case StateCandidate:
 		switch m.MsgType {
 		case pb.MessageType_MsgRequestVote:
-			return HandleRequestVote(r, &m)
+			return r.HandleRequestVote(&m)
 		case pb.MessageType_MsgHeartbeat:
 			r.handleHeartbeat(m)
 		case pb.MessageType_MsgRequestVoteResponse:
 			r.votes[m.From] = !m.Reject
-
+			if countVotes(r.votes) > len(r.votes)/2 {
+				// 投票超过半数，成为leader
+				r.becomeLeader()
+			}
 		}
 	case StateLeader:
 		switch m.MsgType {
 		case pb.MessageType_MsgRequestVote:
-			return HandleRequestVote(r, &m)
+			return r.HandleRequestVote(&m)
 		case pb.MessageType_MsgHeartbeat:
 			r.handleHeartbeat(m)
 		}
@@ -311,12 +317,25 @@ func (r *Raft) Step(m pb.Message) error {
 }
 
 // HandleRequestVote leader和candidate处理投票请求
-func HandleRequestVote(r *Raft, m *pb.Message) error {
+func (r *Raft) HandleRequestVote(m *pb.Message) error {
 	if r.Term >= m.Term {
 		return errors.New("")
 	}
 	r.becomeFollower(m.Term, m.From)
 	return nil
+}
+
+// 发送MessageType_MsgRequestVote给peers请求投票
+func (r *Raft) sendRequestVoteToPeers() {
+	for peerId, _ := range r.votes {
+		resp := pb.Message{
+			MsgType: pb.MessageType_MsgRequestVote,
+			From:    r.id,
+			To:      peerId,
+			Term:    r.Term,
+		}
+		r.msgs = append(r.msgs, resp)
+	}
 }
 
 // handleAppendEntries handle AppendEntries RPC request
