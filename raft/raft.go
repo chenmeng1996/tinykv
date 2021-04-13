@@ -168,19 +168,19 @@ func newRaft(c *Config) *Raft {
 	raftLog := &RaftLog{
 		storage: c.Storage,
 	}
-	return &Raft{
+
+	raft := &Raft{
 		id:               c.ID,
-		Term:             0,
-		Vote:             0,
 		RaftLog:          raftLog,
-		Prs:              nil,
-		State:            0,
-		votes:            make(map[uint64]bool),
-		msgs:             nil,
-		Lead:             0,
 		heartbeatTimeout: c.HeartbeatTick,
 		electionTimeout:  c.ElectionTick,
 	}
+	// 记录peers
+	raft.votes = make(map[uint64]bool)
+	for _, id := range c.peers {
+		raft.votes[id] = false
+	}
+	return raft
 }
 
 // sendAppend sends an append RPC with new entries (if any) and the
@@ -200,22 +200,55 @@ func (r *Raft) tick() {
 	// Your Code Here (2A).
 	r.electionElapsed += 1
 	r.heartbeatTimeout += 1
+	if r.electionElapsed > r.electionTimeout {
+		// 开始选举
+		r.Step(pb.Message{
+			MsgType: pb.MessageType_MsgHup,
+		})
+	}
 }
 
 // becomeFollower transform this peer's state to Follower
 func (r *Raft) becomeFollower(term uint64, lead uint64) {
 	// Your Code Here (2A).
+	r.Lead = lead
+	r.Term = term
+	r.Vote = 0
+	resetVotes(r.votes)
 }
 
 // becomeCandidate transform this peer's state to candidate
 func (r *Raft) becomeCandidate() {
 	// Your Code Here (2A).
+	r.State = StateCandidate
+	// 重置投票，给自己投票
+	resetVotes(r.votes)
+	r.votes[r.id] = true
 }
 
 // becomeLeader transform this peer's state to leader
 func (r *Raft) becomeLeader() {
 	// Your Code Here (2A).
 	// NOTE: Leader should propose a noop entry on its term
+
+}
+
+// 重置投票结果
+func resetVotes(votes map[uint64]bool) {
+	for k, _ := range votes {
+		votes[k] = false
+	}
+}
+
+// 统计投票结果
+func countVotes(votes map[uint64]bool) int {
+	count := 0
+	for k, _ := range votes {
+		if votes[k] == true {
+			count++
+		}
+	}
+	return count
 }
 
 // Step the entrance of handle message, see `MessageType`
@@ -225,23 +258,64 @@ func (r *Raft) Step(m pb.Message) error {
 	switch r.State {
 	case StateFollower:
 		switch m.MsgType {
+		case pb.MessageType_MsgHup:
+			// 转换为candidate
+			r.becomeCandidate()
+			// 发送MessageType_MsgRequestVote给peers请求投票 TODO
 		case pb.MessageType_MsgRequestVote:
-			if m.Term <= r.Term {
+			// 拒绝投票
+			if r.Term >= m.Term || r.Vote != 0 {
+				resp := pb.Message{
+					MsgType: pb.MessageType_MsgRequestVoteResponse,
+					From:    r.id,
+					To:      m.From,
+					Reject:  true,
+				}
+				r.msgs = append(r.msgs, resp)
+				return nil
+			}
+			// 投票
+			if r.Term < m.Term || (r.Term == m.Term && r.RaftLog.committed < m.Commit) {
+				r.Vote = m.From
+				resp := pb.Message{
+					MsgType: pb.MessageType_MsgRequestVoteResponse,
+					From:    r.id,
+					To:      m.From,
+					Reject:  false,
+				}
+				r.msgs = append(r.msgs, resp)
 				return nil
 			}
 		case pb.MessageType_MsgHeartbeat:
-			r.handleSnapshot(m)
+			r.handleHeartbeat(m)
 		}
 	case StateCandidate:
 		switch m.MsgType {
 		case pb.MessageType_MsgRequestVote:
-			if m.Term <= r.Term {
-				return nil
-			}
-			r.becomeFollower(m.Term, m.From)
+			return HandleRequestVote(r, &m)
+		case pb.MessageType_MsgHeartbeat:
+			r.handleHeartbeat(m)
+		case pb.MessageType_MsgRequestVoteResponse:
+			r.votes[m.From] = !m.Reject
+
 		}
 	case StateLeader:
+		switch m.MsgType {
+		case pb.MessageType_MsgRequestVote:
+			return HandleRequestVote(r, &m)
+		case pb.MessageType_MsgHeartbeat:
+			r.handleHeartbeat(m)
+		}
 	}
+	return nil
+}
+
+// HandleRequestVote leader和candidate处理投票请求
+func HandleRequestVote(r *Raft, m *pb.Message) error {
+	if r.Term >= m.Term {
+		return errors.New("")
+	}
+	r.becomeFollower(m.Term, m.From)
 	return nil
 }
 
@@ -253,6 +327,23 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 // handleHeartbeat handle Heartbeat RPC request
 func (r *Raft) handleHeartbeat(m pb.Message) {
 	// Your Code Here (2A).
+	if r.Term > m.Term {
+		return
+	}
+	// 重置heartbeatElapsed, 并变成follower
+	r.heartbeatElapsed = 0
+	switch r.State {
+	case StateCandidate:
+		r.becomeFollower(m.Term, m.From)
+		// 更新committed index fixme
+		r.RaftLog.committed = m.Commit
+		// 发送message到mailbox TODO
+	case StateFollower:
+		// 更新leader id
+		r.Lead = m.From
+		// 重置heartbeatElapsed
+		r.heartbeatElapsed = 0
+	}
 }
 
 // handleSnapshot handle Snapshot RPC request
